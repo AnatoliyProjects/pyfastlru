@@ -10,7 +10,7 @@ from collections.abc import MutableMapping
 import contextlib
 import dataclasses
 import threading
-from typing import Any, Final, Iterator, Self
+from typing import Any, Final, Hashable, Iterator, Self
 
 
 class _ListNode:
@@ -55,7 +55,7 @@ class _LinkedList:
 
     @property
     def front(self) -> _ListNode:
-        """Return the first node.
+        """First list node.
 
         Raises:
             IndexError: If list is empty.
@@ -67,7 +67,7 @@ class _LinkedList:
 
     @property
     def back(self) -> _ListNode:
-        """Return the last node.
+        """Last list node.
 
         Raises:
             IndexError: If list is empty.
@@ -133,7 +133,7 @@ class _LinkedList:
         else:  # no prev and next -> single node
             self._first = None
             self._last = None
-        # Prevents cycling references and dangling nodes
+        # Prevents cycling references and GC-related issues
         node.prev = None
         node.next = None
         self._tot -= 1
@@ -153,24 +153,38 @@ class _CacheItem:
     node: _ListNode
 
 
-class LruCache(MutableMapping, contextlib.AbstractContextManager):
+class LruCache[Key: Hashable, Value](
+    MutableMapping[Key, Value], contextlib.AbstractContextManager
+):
     """Lru cache (thread-safe).
 
-    Synchronization is performed internally with a reentrant lock.
-    Manual synchronization with context protocol or acquire/release methods
+    Provides a `MutableMapping` interface similar to the `dict`.
+
+    Unlike the standard `dict` (which is unbounded), the cache size is limited
+    by the `maxsize` value provided to the cache `__init__` (`128` by default).
+    If the item count exceeds the limit, `LruCache` automatically removes
+    the least recently used item.
+
+    Synchronization is performed internally by the cache with a reentrant lock
+    and doesn't require any actions from the end-user.
+
+    Manual synchronization with `LruCache` context protocol or `acquire`/`release` methods
     is needed only to implement the atomic operations.
+
+    Cache collects usage statistics (`hits`, `misses`, `maxsize`, `currsize`)
+    which may be retrieved with the `cache_info()` method.
     """
 
     def __init__(self, maxsize=128):
         """Create a new cache instance limited by maxsize items."""
         self._lock = threading.RLock()
-        self._cache: dict[Any, _CacheItem] = {}
+        self._cache: dict[Key, _CacheItem] = {}
         self._list = _LinkedList()
         self._maxsize: Final = maxsize
         self._hits = 0
         self._misses = 0
 
-    def __getitem__(self, key: Any) -> Any:
+    def __getitem__(self, key: Key) -> Value:
         """Return an item with the specified key."""
         with self._lock:
             try:
@@ -183,7 +197,7 @@ class LruCache(MutableMapping, contextlib.AbstractContextManager):
             self._list.touch(node)
             return data
 
-    def __setitem__(self, key: Any, value: Any) -> None:
+    def __setitem__(self, key: Key, value: Value) -> None:
         """Set the item at the specified key."""
         with self._lock:
             if key in self._cache:
@@ -198,14 +212,14 @@ class LruCache(MutableMapping, contextlib.AbstractContextManager):
                 node = self._list.pop()
                 self._cache.pop(node.data)
 
-    def __delitem__(self, key: Any) -> None:
+    def __delitem__(self, key: Key) -> None:
         """Delete the item at the specified key."""
         with self._lock:
             item = self._cache.pop(key)
             self._list.pop(item.node)
             return item.data
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[Key]:
         """Iterate over the cache keys in the first-used order."""
         with self._lock:
             for node in self._list:
@@ -229,25 +243,45 @@ class LruCache(MutableMapping, contextlib.AbstractContextManager):
         self._lock.release()
         return False  # re-raise exception (if any)
 
-    def keys(self) -> Iterator[Any]:
+    @property
+    def front(self):
+        """First recently used item.
+
+        Raises:
+            IndexError: If cache is empty.
+        """
+        return self._list.front
+
+    @property
+    def back(self):
+        """Last recently used item.
+
+        This item will be removed after the cache exceeds the size limit.
+
+        Raises:
+            IndexError: If cache is empty.
+        """
+        return self._list.back
+
+    def keys(self) -> Iterator[Key]:
         """Return an iterator over the cache keys in the first-used order."""
         return iter(self)
 
-    def values(self) -> Iterator[Any]:
+    def values(self) -> Iterator[Value]:
         """Return an iterator over the cache values in the first-used order."""
         with self._lock:
             for node in self._list:
                 key = node.data
                 yield self._cache[key].data
 
-    def items(self) -> Iterator[tuple[Any, Any]]:
+    def items(self) -> Iterator[tuple[Key, Value]]:
         """Return an iterator over the cache key/value pairs in the first-used order."""
         with self._lock:
             for node in self._list:
                 key = node.data
                 yield key, self._cache[key].data
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear the cache and statistics."""
         with self._lock:
             self._cache.clear()

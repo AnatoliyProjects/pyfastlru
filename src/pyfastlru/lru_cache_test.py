@@ -6,6 +6,8 @@
 """Lru cache tests (pytest framework)."""
 
 import dataclasses
+import datetime
+import time
 from typing import Any
 import warnings
 
@@ -14,11 +16,12 @@ try:
 
     _NO_PYTEST = False
 except ModuleNotFoundError:
-    _NO_PYTEST = True
     warnings.warn(
         "The pytest framework is not available. "
         "Tests will be executed without any framework support."
     )
+    _NO_PYTEST = True
+
 
 import lru_cache
 
@@ -221,9 +224,23 @@ class TestLruCache:
 if _NO_PYTEST:
 
     def launch_tests():
-        suite = TestLruCache()
-        suite.test_aux_linked_list()
-        suite.test_lru_cache()
+        try:
+            print(f"{datetime.datetime.now().time()}: Unittest started (no framework)")
+            suites = TestLruCache()
+            print(f"{datetime.datetime.now().time()}: List test suite (aux) - started")
+            suites.test_aux_linked_list()
+            print(f"{datetime.datetime.now().time()}: List test suite (aux) - ended")
+            print(
+                f"{datetime.datetime.now().time()}: LRU cache test suite (api) - started"
+            )
+            suites.test_lru_cache()
+            print(
+                f"{datetime.datetime.now().time()}: LRU cache test suite (api) - ended"
+            )
+        except AssertionError as e:
+            print(f"{datetime.datetime.now().time()}: Test case failed!")
+            raise
+        print(f"{datetime.datetime.now().time()}: Unittest ended. OK")
 
     if __name__ == "__main__":
         launch_tests()
