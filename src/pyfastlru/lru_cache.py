@@ -6,15 +6,17 @@
 """Lru cache (thread-safe)."""
 
 import collections
-from collections.abc import MutableMapping
+from collections.abc import MutableMapping, Hashable
 import contextlib
 import dataclasses
 import threading
-from typing import Any, Final, Hashable, Iterator, Self
+from typing import Any, Final, Iterator, NamedTuple, override, Self
 
 
 class _ListNode:
     """Linked list node (internal)."""
+
+    __slots__ = ["data", "prev", "next"]
 
     def __init__(
         self,
@@ -140,17 +142,25 @@ class _LinkedList:
         return node
 
 
+@dataclasses.dataclass(slots=True)
+class _CacheItem[Value]:
+    """Cache item (internal)."""
+
+    data: Value
+    node: _ListNode
+
+
 CacheInfo = collections.namedtuple(
     "_CacheInfo", ["hits", "misses", "maxsize", "currsize"]
 )
+"""Cache statistics."""
 
 
-@dataclasses.dataclass
-class _CacheItem:
-    """Cache item (internal)."""
+class CacheItem[Key, Value](NamedTuple):
+    """Cache item as a key/value pair."""
 
-    data: Any
-    node: _ListNode
+    key: Key
+    value: Value
 
 
 class LruCache[Key: Hashable, Value](
@@ -160,67 +170,74 @@ class LruCache[Key: Hashable, Value](
 
     Provides a `MutableMapping` interface similar to the `dict`.
 
-    Unlike the standard `dict` (which is unbounded), the cache size is limited
-    by the `maxsize` value provided to the cache `__init__` (`128` by default).
-    If the item count exceeds the limit, `LruCache` automatically removes
-    the least recently used item.
+    However, unlike a regular `dict`, which has no size limits, the cache size
+    is restricted by the `maxsize` parameter specified during the initialization
+    of the cache (defaulting to `128`). When the number of items exceeds this limit,
+    the `LruCache` automatically removes the least recently used item to make space
+    for new entries.
 
-    Synchronization is performed internally by the cache with a reentrant lock
-    and doesn't require any actions from the end-user.
+    Also, unlike a standard `dict`, which maintains a FIFO (first-in, first-out) order,
+    the cache employs an MRU (most recently used) order. As a result, all iterators
+    provided by the `LruCache` — including those from the `__iter__`, `keys`, `values`,
+    and `items` methods — iterate from the MRU (most recently used) item to the LRU
+    (least recently used) item.
 
-    Manual synchronization with `LruCache` context protocol or `acquire`/`release` methods
-    is needed only to implement the atomic operations.
+    Cache synchronization is handled internally using a reentrant lock,
+    so no action is needed from the end user. Manual synchronization with the `LruCache`
+    context manager or through the `acquire` and `release` methods is only necessary
+    for implementing atomic operations.
 
-    Cache collects usage statistics (`hits`, `misses`, `maxsize`, `currsize`)
-    which may be retrieved with the `cache_info()` method.
+    The cache gathers usage statistics, including `hits`, `misses`, `maxsize`, and `currsize`,
+    which can be accessed using the `cache_info()` method.
     """
 
     def __init__(self, maxsize=128):
         """Create a new cache instance limited by maxsize items."""
-        self._lock = threading.RLock()
-        self._cache: dict[Key, _CacheItem] = {}
+        if maxsize < 1:
+            raise ValueError(f"Wrong cache maxsize: {maxsize}")
+        self._cache: dict[Key, _CacheItem[Value]] = {}
         self._list = _LinkedList()
+        self._lock = threading.RLock()
         self._maxsize: Final = maxsize
         self._hits = 0
         self._misses = 0
 
     def __getitem__(self, key: Key) -> Value:
-        """Return an item with the specified key."""
+        """Return an item that has the specified key."""
         with self._lock:
             try:
                 item = self._cache[key]
-                data, node = item.data, item.node
+                val, node = item.data, item.node
                 self._hits += 1
             except KeyError:
                 self._misses += 1
                 raise
             self._list.touch(node)
-            return data
+            return val
 
     def __setitem__(self, key: Key, value: Value) -> None:
-        """Set the item at the specified key."""
+        """Store an item at the given key."""
         with self._lock:
-            if key in self._cache:
-                item = self._cache[key]
+            if (item := self._cache.get(key, None)) is not None:
                 item.data = value
                 self._list.touch(item.node)
                 return
-            # not exists
+            # not found
             node = self._list.appendleft(key)
             self._cache[key] = _CacheItem(value, node)
             if len(self._cache) > self._maxsize:
-                node = self._list.pop()
-                self._cache.pop(node.data)
+                self.popitem()
+                self._hits -= 1  # popitem affects cache statistics
 
     def __delitem__(self, key: Key) -> None:
-        """Delete the item at the specified key."""
+        """Remove an item at the given key."""
         with self._lock:
             item = self._cache.pop(key)
             self._list.pop(item.node)
             return item.data
 
     def __iter__(self) -> Iterator[Key]:
-        """Iterate over the cache keys in the first-used order."""
+        """Iterate over the cache keys in MRU-first order."""
         with self._lock:
             for node in self._list:
                 yield node.data
@@ -228,9 +245,7 @@ class LruCache[Key: Hashable, Value](
     def __len__(self) -> int:
         """Return the cache length."""
         with self._lock:
-            assert len(self._cache) == len(
-                self._list
-            ), "Table and tracker are out of sync"
+            assert len(self._cache) == len(self._list), "Out of sync"
             return len(self._cache)
 
     def __enter__(self) -> Self:
@@ -244,42 +259,88 @@ class LruCache[Key: Hashable, Value](
         return False  # re-raise exception (if any)
 
     @property
-    def front(self):
-        """First recently used item.
+    def front(self) -> CacheItem[Key, Value]:
+        """Return an MRU item without touching LRU order.
 
         Raises:
-            IndexError: If cache is empty.
+            KeyError: If cache is empty.
         """
-        return self._list.front
+        with self._lock:
+            try:
+                key = self._list.front.data
+            except IndexError:
+                msg = "It is not possible to retrieve an item from an empty cache"
+                raise KeyError(msg) from None
+            val = self._cache[key].data
+            return CacheItem(key, val)
 
     @property
-    def back(self):
-        """Last recently used item.
+    def back(self) -> CacheItem[Key, Value]:
+        """Return an LRU item without touching LRU order.
 
-        This item will be removed after the cache exceeds the size limit.
+        This item will be removed first if the cache exceeds the size limit.
 
         Raises:
-            IndexError: If cache is empty.
+            KeyError: If cache is empty.
         """
-        return self._list.back
+        with self._lock:
+            try:
+                key = self._list.back.data
+            except IndexError:
+                msg = "It is not possible to retrieve an item from an empty cache"
+                raise KeyError(msg) from None
+            val = self._cache[key].data
+            return CacheItem(key, val)
+
+    def touch(self, key: Key) -> None:
+        """Mark the desired item as an MRU without retrieving it.
+
+        Raises:
+            KeyError: If item is not found.
+        """
+        with self._lock:
+            item = self._cache[key]
+            self._list.touch(item.node)
+
+    def touch_last(self) -> None:
+        """Mark the LRU item as an MRU without retrieving it.
+
+        Raises:
+            KeyError: If cache is empty.
+        """
+        self.touch(self.back.key)
 
     def keys(self) -> Iterator[Key]:
-        """Return an iterator over the cache keys in the first-used order."""
+        """Iterate over the cache keys in the MRU-first order."""
         return iter(self)
 
     def values(self) -> Iterator[Value]:
-        """Return an iterator over the cache values in the first-used order."""
+        """Iterate over the cache values in the MRU-first order."""
         with self._lock:
             for node in self._list:
                 key = node.data
-                yield self._cache[key].data
+                val = self._cache[key].data
+                yield val
 
-    def items(self) -> Iterator[tuple[Key, Value]]:
-        """Return an iterator over the cache key/value pairs in the first-used order."""
+    def items(self) -> Iterator[CacheItem[Key, Value]]:
+        """Iterate over the cache key/value pairs in the MRU-first order."""
         with self._lock:
             for node in self._list:
                 key = node.data
-                yield key, self._cache[key].data
+                val = self._cache[key].data
+                yield CacheItem(key, val)
+
+    @override
+    def popitem(self) -> CacheItem[Key, Value]:
+        """Remove and return a (key, value) pair from the cache in LRU order.
+
+        Raises:
+            KeyError: If cache is empty.
+        """
+        with self._lock:
+            item = self.back
+            self.pop(item.key)
+            return item
 
     def clear(self) -> None:
         """Clear the cache and statistics."""

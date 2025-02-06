@@ -8,32 +8,39 @@ The MIT License (MIT). Copyright © 2025 Anatoly Petrov <petrov.projects@gmail.c
 
 # Description
 
-LRU cache is a data structure that combines fast item access by the key with 
-invalidation of least recently used items in case of size limit exhaustion.
+An LRU (Least Recently Used) cache is a data structure that provides quick access 
+to items by key and automatically removes the least recently used items in case of 
+size exhaustion.
 
-These traits make the LRU cache useful for memoizing some computations 
-(requests, resources, etc.) without risking memory blowup.
+These characteristics make the LRU cache ideal for memoizing arbitrary data 
+without the risk of excessive memory usage. 
 
-Our implementation uses a doubly linked list for item usage tracking and a `dict` 
-for the lookup table.
+The proposed implementation (`LruCache` class) utilizes a doubly linked list 
+to track item usage and a dictionary for the lookup table.
 
 # Overview
 
-The cache provides a `MutableMapping` interface. Thus, you may use `LruCache` 
-the same way you use `dict`. 
+The `LruCache` provides a `MutableMapping` interface similar to the `dict`.
 
-Unlike the standard `dict` (which is unbounded), the cache size is limited 
-by the `maxsize` value provided to the cache `__init__` method (`128` by default). 
-If the item count exceeds the limit,`LruCache` automatically removes the least recently used item.
+However, unlike a regular `dict`, which has no size limits, the cache size 
+is restricted by the `maxsize` parameter specified during the initialization 
+of the cache (defaulting to `128`). When the number of items exceeds this limit, 
+the `LruCache` automatically removes the least recently used item to make space 
+for new entries.
 
-Synchronization is performed internally by the cache with a reentrant lock and doesn't require
-any actions from the end-user.
+Also, unlike a standard `dict`, which maintains a FIFO (first-in, first-out) order,
+the cache employs an MRU (most recently used) order. As a result, all iterators
+provided by the `LruCache` — including those from the `__iter__`, `keys`, `values`,
+and `items` methods — iterate from the MRU (most recently used) item to the LRU 
+(least recently used) item.
 
-Manual synchronization with `LruCache` context protocol or `acquire`/`release` methods 
-is needed only to implement the atomic operations.
+Cache synchronization is handled internally using a reentrant lock,
+so no action is needed from the end user. Manual synchronization with the `LruCache` 
+context manager or through the `acquire` and `release` methods is only necessary 
+for implementing atomic operations.
 
-Cache collects usage statistics (`hits`, `misses`, `maxsize`, `currsize`) 
-which may be retrieved with the `cache_info()` method.
+The cache gathers usage statistics, including `hits`, `misses`, `maxsize`, and `currsize`,
+which can be accessed using the `cache_info()` method.
 
 # Testing
 

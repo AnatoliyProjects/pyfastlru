@@ -7,7 +7,6 @@
 
 import dataclasses
 import datetime
-import time
 from typing import Any
 import warnings
 
@@ -106,6 +105,7 @@ class TestLruCache:
         # init()
         seq = lru_cache._LinkedList()
         _check_list(seq, content=[], front=None, back=None, size=0, empty=True)
+
         # appendleft()
         a = seq.appendleft("a")
         _check_node(a, prev=None, next=None, data="a")
@@ -116,6 +116,7 @@ class TestLruCache:
         c = seq.appendleft("c")
         _check_node(c, prev=None, next=b, data="c")
         _check_list(seq, content=["c", "b", "a"], front=c, back=a, size=3)
+
         # touch()
         seq.touch(a)
         _check_node(a, prev=None, next=c, data="a")
@@ -126,6 +127,7 @@ class TestLruCache:
         seq.touch(c)
         _check_node(c, prev=None, next=a, data="c")
         _check_list(seq, content=["c", "a", "b"], front=c, back=b, size=3)
+
         # pop()
         removed = seq.pop()
         assert removed is b
@@ -138,6 +140,7 @@ class TestLruCache:
         removed = seq.pop()
         assert removed is c
         _check_list(seq, content=[], front=None, back=None, size=0, empty=True)
+
         # clear()
         seq.appendleft("a")
         seq.appendleft("b")
@@ -148,9 +151,10 @@ class TestLruCache:
     def test_lru_cache(self):
         """Test lru cache end-user api."""
         # init()
-        cache = lru_cache.LruCache(maxsize=3)
+        cache = lru_cache.LruCache[int, str](maxsize=3)
         stats = _CacheInfo(maxsize=3)
         _check_cache(cache, items=[], size=0, empty=True, stats=stats)
+
         # setitem()
         cache[0] = "a"
         stats.currsize += 1
@@ -161,6 +165,12 @@ class TestLruCache:
         cache[2] = "c"
         stats.currsize += 1
         _check_cache(cache, items=[(2, "c"), (1, "b"), (0, "a")], size=3, stats=stats)
+
+        # front/back
+        assert cache.front == (2, "c")
+        assert cache.back == (0, "a")
+        _check_cache(cache, items=[(2, "c"), (1, "b"), (0, "a")], size=3, stats=stats)
+
         # getitem()
         assert cache[2] == "c"
         stats.hits += 1
@@ -174,18 +184,32 @@ class TestLruCache:
         assert cache.get(3, None) is None
         stats.misses += 1
         _check_cache(cache, items=[(0, "a"), (1, "b"), (2, "c")], size=3, stats=stats)
+
+        # touch()
+        cache.touch(1)
+        _check_cache(cache, items=[(1, "b"), (0, "a"), (2, "c")], size=3, stats=stats)
+        cache.touch(2)
+        _check_cache(cache, items=[(2, "c"), (1, "b"), (0, "a")], size=3, stats=stats)
+        cache.touch_last()
+        _check_cache(cache, items=[(0, "a"), (2, "c"), (1, "b")], size=3, stats=stats)
+        cache.touch_last()
+        _check_cache(cache, items=[(1, "b"), (0, "a"), (2, "c")], size=3, stats=stats)
+        cache.touch(0)
+        _check_cache(cache, items=[(0, "a"), (1, "b"), (2, "c")], size=3, stats=stats)
+
         # delitem()
         del cache[1]
         stats.currsize -= 1
         _check_cache(cache, items=[(0, "a"), (2, "c")], size=2, stats=stats)
-        assert cache.pop(2) == "c"
+        assert cache.popitem() == (2, "c")
         stats.currsize -= 1
         stats.hits += 1
         _check_cache(cache, items=[(0, "a")], size=1, stats=stats)
-        assert cache.popitem() == (0, "a")
+        assert cache.pop(0) == "a"
         stats.currsize -= 1
         stats.hits += 1
         _check_cache(cache, items=[], size=0, empty=True, stats=stats)
+
         # item replacement
         cache = lru_cache.LruCache(maxsize=3)
         stats = _CacheInfo(maxsize=3)
@@ -197,7 +221,8 @@ class TestLruCache:
         _check_cache(cache, items=[(2, "y"), (1, "x"), (3, "c")], size=3, stats=stats)
         cache[3] = "z"
         _check_cache(cache, items=[(3, "z"), (2, "y"), (1, "x")], size=3, stats=stats)
-        # cache bound
+
+        # cache bounds
         cache = lru_cache.LruCache(maxsize=3)
         stats = _CacheInfo(maxsize=3)
         cache.update({1: "a", 2: "b", 3: "c"})
@@ -215,6 +240,7 @@ class TestLruCache:
         _check_cache(cache, items=[(4, "d"), (5, "e"), (2, "b")], size=3, stats=stats)
         cache[6] = "f"
         _check_cache(cache, items=[(6, "f"), (4, "d"), (5, "e")], size=3, stats=stats)
+
         # clear()
         cache.clear()
         stats = _CacheInfo(maxsize=3)
@@ -240,7 +266,7 @@ if _NO_PYTEST:
         except AssertionError as e:
             print(f"{datetime.datetime.now().time()}: Test case failed!")
             raise
-        print(f"{datetime.datetime.now().time()}: Unittest ended. OK")
+        print(f"{datetime.datetime.now().time()}: Unittest ended. No errors detected")
 
     if __name__ == "__main__":
         launch_tests()
